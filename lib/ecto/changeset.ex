@@ -417,7 +417,9 @@ defmodule Ecto.Changeset do
   During casting, all `permitted` parameters whose values match the specified
   type information will have their key name converted to an atom and stored
   together with the value as a change in the `:changes` field of the changeset.
-  All parameters that are not explicitly permitted are ignored.
+  If the cast value matches the default value for the schema, it will not be
+  included in the `:changes` unless the `:force_changes: true` option is
+  provided. All parameters that are not explicitly permitted are ignored.
 
   If casting of all fields is successful, the changeset is returned as valid.
 
@@ -428,6 +430,8 @@ defmodule Ecto.Changeset do
 
     * `:empty_values` - a list of values to be considered as empty when casting.
       Empty values are always replaced by the default value of the respective key. Defaults to `[""]`
+    * `:force_changes` - a boolean indicating whether to include default values
+      in `:changes`. Defaults to `false`
 
   ## Examples
 
@@ -497,6 +501,7 @@ defmodule Ecto.Changeset do
 
   defp cast(%{} = data, %{} = types, %{} = changes, %{} = params, permitted, opts) when is_list(permitted) do
     empty_values = Keyword.get(opts, :empty_values, @empty_values)
+    force? = Keyword.get(opts, :force_changes, false)
     params = convert_params(params)
 
     defaults = case data do
@@ -506,7 +511,7 @@ defmodule Ecto.Changeset do
 
     {changes, errors, valid?} =
       Enum.reduce(permitted, {changes, [], true},
-                  &process_param(&1, params, types, data, empty_values, defaults, &2))
+                  &process_param(&1, params, types, data, empty_values, defaults, force?, &2))
 
     %Changeset{params: params, data: data, valid?: valid?,
                errors: Enum.reverse(errors), changes: changes, types: types}
@@ -517,7 +522,7 @@ defmodule Ecto.Changeset do
                           message: "expected params to be a :map, got: `#{inspect params}`"
   end
 
-  defp process_param(key, params, types, data, empty_values, defaults, {changes, errors, valid?}) do
+  defp process_param(key, params, types, data, empty_values, defaults, force?, {changes, errors, valid?}) do
     {key, param_key} = cast_key(key)
     type = cast_type!(types, key)
 
@@ -527,7 +532,7 @@ defmodule Ecto.Changeset do
         _ -> Map.get(data, key)
       end
 
-    case cast_field(key, param_key, type, params, current, empty_values, defaults, valid?) do
+    case cast_field(key, param_key, type, params, current, empty_values, defaults, force?, valid?) do
       {:ok, value, valid?} ->
         {Map.put(changes, key, value), errors, valid?}
       :missing ->
@@ -562,13 +567,13 @@ defmodule Ecto.Changeset do
   defp cast_key(key),
     do: raise ArgumentError, "cast/3 expects a list of atom keys, got: `#{inspect key}`"
 
-  defp cast_field(key, param_key, type, params, current, empty_values, defaults, valid?) do
+  defp cast_field(key, param_key, type, params, current, empty_values, defaults, force?, valid?) do
     case params do
       %{^param_key => value} ->
         value = if value in empty_values, do: Map.get(defaults, key), else: value
         case Ecto.Type.cast(type, value) do
           {:ok, value} ->
-            if Ecto.Type.equal?(type, current, value) do
+            if !force? && Ecto.Type.equal?(type, current, value) do
               :missing
             else
               {:ok, value, valid?}
